@@ -233,6 +233,10 @@ function App() {
   });
   const [isFirebaseReady, setIsFirebaseReady] = useState(false);
   const [userId, setUserId] = useState('');
+  const [persistentGroceryList, setPersistentGroceryList] = useState([]);
+  const [baseGroceryList, setBaseGroceryList] = useState([]); // Store manually added items
+  const [frequentItems] = useState(['Potato', 'Tomato', 'Ginger', 'Lemon', 'Dhaniya', 'Adrak']);
+  const [masalaItems] = useState(['Garam Masala', 'Coriander Powder', 'Amchur', 'Pepper', 'Dhaniya Powder']);
 
   // Initialize Firebase and load data
   useEffect(() => {
@@ -244,14 +248,20 @@ function App() {
           setIsFirebaseReady(true);
 
           // Load data from Firebase
-          const [ingredients, customMealsData, confirmedMealsData] = await Promise.all([
+          const [ingredients, customMealsData, confirmedMealsData, groceryData, baseGroceryData] = await Promise.all([
             FirebaseStorageManager.load(COLLECTIONS.INGREDIENTS, { ...INGREDIENTS }),
             FirebaseStorageManager.load(COLLECTIONS.CUSTOM_MEALS, { breakfast: [], lunch: [], dinner: [] }),
-            FirebaseStorageManager.load(COLLECTIONS.CONFIRMED_MEALS, {})
+            FirebaseStorageManager.load(COLLECTIONS.CONFIRMED_MEALS, {}),
+            FirebaseStorageManager.load('groceryList', []),
+            FirebaseStorageManager.load('baseGroceryList', [])
           ]);
 
           setEditableIngredients(ingredients);
           setCustomMeals(customMealsData);
+          setPersistentGroceryList(groceryData);
+          setGroceryList(groceryData);
+          setBaseGroceryList(baseGroceryData);
+
           if (confirmedMealsData.meals) {
             setConfirmedMeals(confirmedMealsData.meals);
             if (confirmedMealsData.confirmationTime) {
@@ -268,6 +278,30 @@ function App() {
 
     initializeApp();
   }, []);
+
+  // Update grocery list whenever menu selection changes
+  useEffect(() => {
+    const updateGroceryFromMeals = () => {
+      // Generate ingredients from current meal selection
+      const mealIngredients = generateGroceryList(weeklyMeals);
+
+      // Combine base grocery list (manually added items) with meal ingredients
+      const combinedList = [...baseGroceryList];
+
+      // Add meal ingredients that aren't already in the base list
+      mealIngredients.forEach(ingredient => {
+        const exists = combinedList.some(item => item.name === ingredient.name);
+        if (!exists) {
+          combinedList.push(ingredient);
+        }
+      });
+
+      setPersistentGroceryList(combinedList);
+      setGroceryList(combinedList);
+    };
+
+    updateGroceryFromMeals();
+  }, [weeklyMeals, baseGroceryList, editableIngredients]);
 
   const handleMealChange = (day, mealType, meal) => {
     setWeeklyMeals(prev => ({
@@ -311,25 +345,24 @@ function App() {
   };
 
   const generateGroceryList = (meals) => {
-    const ingredientCount = {};
+    const ingredientSet = new Set();
 
-    // Count ingredients from all confirmed meals
+    // Add ingredients from all confirmed meals
     Object.values(meals).forEach(dayMeals => {
       Object.values(dayMeals).forEach(meal => {
         if (meal && meal !== '' && editableIngredients[meal]) {
           editableIngredients[meal].forEach(ingredient => {
-            ingredientCount[ingredient] = (ingredientCount[ingredient] || 0) + 1;
+            ingredientSet.add(ingredient);
           });
         }
       });
     });
 
     // Convert to array and sort alphabetically
-    return Object.keys(ingredientCount)
+    return Array.from(ingredientSet)
       .sort()
       .map(ingredient => ({
-        name: ingredient,
-        count: ingredientCount[ingredient]
+        name: ingredient
       }));
   };
 
@@ -383,10 +416,7 @@ function App() {
       });
     }
 
-    // Generate grocery list
-    const groceries = generateGroceryList(weeklyMeals);
-    setGroceryList(groceries);
-    setCheckedItems({});
+    // The grocery list will be updated automatically by the useEffect
 
     // Reset planner to original state
     const initial = {};
@@ -414,10 +444,15 @@ function App() {
     weeklyMeals[day]?.dinner
   );
 
-  const getMealOptions = (mealType) => [
-    ...MEALS[mealType],
-    ...customMeals[mealType]
-  ];
+  const getMealOptions = (mealType) => {
+    const hiddenMealsKey = `hidden${mealType.charAt(0).toUpperCase() + mealType.slice(1)}`;
+    const hiddenMeals = customMeals[hiddenMealsKey] || [];
+
+    return [
+      ...MEALS[mealType].filter(meal => !hiddenMeals.includes(meal)),
+      ...customMeals[mealType]
+    ];
+  };
 
   const fillRandomMeals = () => {
     const newWeeklyMeals = {};
@@ -651,7 +686,7 @@ function App() {
         )}
 
         {isConfirmed && (
-          <div className="bg-white rounded-xl shadow-xl p-4 sm:p-8 animate-slide-up">
+          <div className="bg-white rounded-xl shadow-xl p-4 sm:p-8 mb-8 animate-slide-up">
             <div className="text-center mb-6 sm:mb-8">
               <h2 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">This Week's Menu</h2>
               {confirmationTime && (
@@ -700,44 +735,6 @@ function App() {
               </table>
             </div>
 
-            {groceryList.length > 0 && (
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <h3 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Grocery Checklist</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {groceryList.map((item, index) => (
-                    <div key={index} className="flex items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors duration-200">
-                      <input
-                        type="checkbox"
-                        id={`grocery-${index}`}
-                        checked={checkedItems[index] || false}
-                        onChange={() => handleGroceryCheck(index)}
-                        className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
-                      <label
-                        htmlFor={`grocery-${index}`}
-                        className={`ml-3 text-sm flex-1 cursor-pointer ${
-                          checkedItems[index] ? 'line-through text-gray-500' : 'text-gray-700'
-                        }`}
-                      >
-                        {item.name}
-                        {item.count > 1 && (
-                          <span className="ml-1 text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
-                            {item.count}x
-                          </span>
-                        )}
-                      </label>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 text-sm text-gray-600">
-                  <span className="font-medium">
-                    {groceryList.filter((_, index) => checkedItems[index]).length} / {groceryList.length}
-                  </span>
-                  {' '}items checked
-                </div>
-              </div>
-            )}
-
             <div className="mt-8 pt-6 border-t border-gray-200">
               <h3 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Manage Ingredients</h3>
 
@@ -758,96 +755,156 @@ function App() {
                 ))}
               </div>
 
-              {/* Data Backup & Restore */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h4 className="text-lg font-semibold text-gray-800 mb-3">Data Backup & Restore</h4>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    onClick={async () => {
-                      const data = await FirebaseStorageManager.exportData();
-                      if (data) {
-                        const blob = new Blob([data], { type: 'application/json' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `meal-planner-backup-${new Date().toISOString().split('T')[0]}.json`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                      } else {
-                        alert('Failed to export data. Please try again.');
-                      }
-                    }}
-                    className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
-                  >
-                    📥 Export Data
-                  </button>
-
-                  <label className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm cursor-pointer">
-                    📤 Import Data
-                    <input
-                      type="file"
-                      accept=".json"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onload = async (event) => {
-                            const success = await FirebaseStorageManager.importData(event.target.result);
-                            if (success) {
-                              alert('Data imported successfully! Please refresh the page to see changes.');
-                              window.location.reload();
-                            } else {
-                              alert('Failed to import data. Please check the file format.');
-                            }
-                          };
-                          reader.readAsText(file);
-                        }
-                      }}
-                    />
-                  </label>
-
-                  <button
-                    onClick={() => {
-                      if (confirm('Are you sure you want to reset all data to default? This cannot be undone.')) {
-                        localStorage.clear();
-                        window.location.reload();
-                      }
-                    }}
-                    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm"
-                  >
-                    🔄 Reset to Default
-                  </button>
-                </div>
-                <div className="mt-3 text-xs text-gray-600">
-                  <p className="mb-1">
-                    {isFirebaseReady ? (
-                      <>🔗 <span className="text-green-600 font-medium">Connected to Firebase</span> - Data syncs across all your devices</>
-                    ) : (
-                      <>⏳ <span className="text-yellow-600 font-medium">Connecting...</span> - Please wait</>
-                    )}
-                  </p>
-                  {userId && (
-                    <p className="text-xs text-gray-500">
-                      User ID: {userId.substring(0, 8)}...
-                    </p>
-                  )}
-                  <p className="mt-1">
-                    💾 Data automatically syncs to Firebase cloud storage. Changes appear instantly on all your devices.
-                  </p>
-                </div>
-              </div>
             </div>
           </div>
         )}
 
+        {/* Grocery Lists Section - Always Visible */}
+        <div className="bg-white rounded-xl shadow-xl p-4 sm:p-8 mb-8 animate-slide-up">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Grocery Checklist */}
+            <div className="lg:col-span-1">
+              <h3 className="text-lg font-bold text-gray-800 mb-4">Grocery Checklist</h3>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {persistentGroceryList.map((item, index) => (
+                  <div key={index} className="flex items-center p-2 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors duration-200">
+                    <input
+                      type="checkbox"
+                      id={`grocery-${index}`}
+                      checked={checkedItems[index] || false}
+                      onChange={() => handleGroceryCheck(index)}
+                      className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                    />
+                    <label
+                      htmlFor={`grocery-${index}`}
+                      className={`ml-3 text-sm flex-1 cursor-pointer ${
+                        checkedItems[index] ? 'line-through text-gray-500' : 'text-gray-700'
+                      }`}
+                    >
+                      {item.name}
+                    </label>
+                    <button
+                      onClick={async () => {
+                        const itemToRemove = persistentGroceryList[index];
+
+                        // Remove from persistentGroceryList
+                        const newList = persistentGroceryList.filter((_, i) => i !== index);
+                        setPersistentGroceryList(newList);
+
+                        // Also remove from baseGroceryList if it exists there
+                        const isInBaseList = baseGroceryList.some(item => item.name === itemToRemove.name);
+                        if (isInBaseList) {
+                          const newBaseList = baseGroceryList.filter(item => item.name !== itemToRemove.name);
+                          setBaseGroceryList(newBaseList);
+                          if (isFirebaseReady) {
+                            await FirebaseStorageManager.save('baseGroceryList', newBaseList);
+                          }
+                        }
+
+                        const newCheckedItems = { ...checkedItems };
+                        delete newCheckedItems[index];
+                        // Reindex checked items
+                        const reindexedCheckedItems = {};
+                        Object.keys(newCheckedItems).forEach(key => {
+                          const oldIndex = parseInt(key);
+                          if (oldIndex > index) {
+                            reindexedCheckedItems[oldIndex - 1] = newCheckedItems[key];
+                          } else if (oldIndex < index) {
+                            reindexedCheckedItems[oldIndex] = newCheckedItems[key];
+                          }
+                        });
+                        setCheckedItems(reindexedCheckedItems);
+
+                        if (isFirebaseReady) {
+                          await FirebaseStorageManager.save('groceryList', newList);
+                        }
+                      }}
+                      className="ml-2 text-red-500 hover:text-red-700 text-sm"
+                      title="Remove from grocery list"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {persistentGroceryList.length === 0 && (
+                  <p className="text-gray-500 text-sm italic">No items in grocery list</p>
+                )}
+              </div>
+              {persistentGroceryList.length > 0 && (
+                <div className="mt-3 text-sm text-gray-600">
+                  <span className="font-medium">
+                    {persistentGroceryList.filter((_, index) => checkedItems[index]).length} / {persistentGroceryList.length}
+                  </span>
+                  {' '}items checked
+                </div>
+              )}
+            </div>
+
+            {/* Frequently Used Items */}
+            <div className="lg:col-span-1">
+              <h3 className="text-lg font-bold text-gray-800 mb-4">Frequently Used</h3>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {frequentItems.map((item, index) => (
+                  <div key={index} className="flex items-center justify-between p-2 bg-green-50 rounded-lg hover:bg-green-100 transition-colors duration-200">
+                    <span className="text-sm text-gray-700">{item}</span>
+                    <button
+                      onClick={async () => {
+                        const existingItem = baseGroceryList.find(gItem => gItem.name === item);
+                        if (!existingItem) {
+                          const newBaseList = [...baseGroceryList, { name: item }];
+                          setBaseGroceryList(newBaseList);
+                          if (isFirebaseReady) {
+                            await FirebaseStorageManager.save('baseGroceryList', newBaseList);
+                          }
+                        }
+                      }}
+                      className="text-green-600 hover:text-green-800 text-sm font-bold bg-green-100 hover:bg-green-200 px-2 py-1 rounded"
+                      title="Add to grocery list"
+                    >
+                      +
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Masala List */}
+            <div className="lg:col-span-1">
+              <h3 className="text-lg font-bold text-gray-800 mb-4">Masala List</h3>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {masalaItems.map((item, index) => (
+                  <div key={index} className="flex items-center justify-between p-2 bg-orange-50 rounded-lg hover:bg-orange-100 transition-colors duration-200">
+                    <span className="text-sm text-gray-700">{item}</span>
+                    <button
+                      onClick={async () => {
+                        const existingItem = baseGroceryList.find(gItem => gItem.name === item);
+                        if (!existingItem) {
+                          const newBaseList = [...baseGroceryList, { name: item }];
+                          setBaseGroceryList(newBaseList);
+                          if (isFirebaseReady) {
+                            await FirebaseStorageManager.save('baseGroceryList', newBaseList);
+                          }
+                        }
+                      }}
+                      className="text-orange-600 hover:text-orange-800 text-sm font-bold bg-orange-100 hover:bg-orange-200 px-2 py-1 rounded"
+                      title="Add to grocery list"
+                    >
+                      +
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Ingredients Modal */}
         {showIngredientsModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
-              <div className="flex justify-between items-center p-6 border-b border-gray-200">
-                <h2 className="text-2xl font-bold text-gray-800 capitalize">
-                  {selectedMealType} Ingredients
+            <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center p-4 sm:p-6 border-b border-gray-200 flex-shrink-0">
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-800 capitalize">
+                  {selectedMealType} Management
                 </h2>
                 <button
                   onClick={handleIngredientsModalClose}
@@ -857,82 +914,240 @@ function App() {
                 </button>
               </div>
 
-              <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {MEALS[selectedMealType]?.map(mealName => (
-                    <div key={mealName} className="border border-gray-200 rounded-lg p-4">
-                      <h3 className="font-semibold text-lg text-gray-800 mb-3">{mealName}</h3>
-                      <div className="space-y-2">
-                        {(editableIngredients[mealName] || []).map((ingredient, index) => (
-                          <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
-                            <input
-                              type="text"
-                              value={ingredient}
-                              onChange={(e) => {
-                                const newIngredients = [...editableIngredients[mealName]];
-                                newIngredients[index] = e.target.value;
-                                handleIngredientUpdate(mealName, newIngredients);
-                              }}
-                              className="flex-1 bg-transparent border-none outline-none text-sm"
-                            />
-                            <button
-                              onClick={() => handleIngredientRemove(mealName, index)}
-                              className="text-red-500 hover:text-red-700 ml-2 text-sm font-bold"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        ))}
-                        <div className="flex items-center mt-2">
-                          <input
-                            type="text"
-                            placeholder="Add new ingredient"
-                            className="flex-1 p-2 border border-gray-300 rounded text-sm"
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && e.target.value.trim()) {
-                                handleIngredientAdd(mealName, e.target.value);
-                                e.target.value = '';
-                              }
-                            }}
-                          />
-                          <button
-                            onClick={(e) => {
-                              const input = e.target.previousElementSibling;
-                              if (input.value.trim()) {
-                                handleIngredientAdd(mealName, input.value);
-                                input.value = '';
-                              }
-                            }}
-                            className="ml-2 px-3 py-2 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+              {/* Add New Meal Item Section */}
+              <div className="p-4 sm:p-6 border-b border-gray-200 bg-gray-50 flex-shrink-0">
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">Add New {selectedMealType} Item</h3>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder={`Enter new ${selectedMealType} item name`}
+                    className="flex-1 p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter' && e.target.value.trim()) {
+                        const newMealName = e.target.value.trim();
+                        if (!MEALS[selectedMealType].includes(newMealName) && !customMeals[selectedMealType].includes(newMealName)) {
+                          const newCustomMeals = {
+                            ...customMeals,
+                            [selectedMealType]: [...customMeals[selectedMealType], newMealName]
+                          };
+                          setCustomMeals(newCustomMeals);
+
+                          if (isFirebaseReady) {
+                            await FirebaseStorageManager.save(COLLECTIONS.CUSTOM_MEALS, newCustomMeals);
+                          }
+
+                          if (!editableIngredients[newMealName]) {
+                            const newIngredients = {
+                              ...editableIngredients,
+                              [newMealName]: []
+                            };
+                            setEditableIngredients(newIngredients);
+
+                            if (isFirebaseReady) {
+                              await FirebaseStorageManager.save(COLLECTIONS.INGREDIENTS, newIngredients);
+                            }
+                          }
+
+                          e.target.value = '';
+                        } else {
+                          alert('This meal item already exists!');
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={async (e) => {
+                      const input = e.target.previousElementSibling;
+                      if (input.value.trim()) {
+                        const newMealName = input.value.trim();
+                        if (!MEALS[selectedMealType].includes(newMealName) && !customMeals[selectedMealType].includes(newMealName)) {
+                          const newCustomMeals = {
+                            ...customMeals,
+                            [selectedMealType]: [...customMeals[selectedMealType], newMealName]
+                          };
+                          setCustomMeals(newCustomMeals);
+
+                          if (isFirebaseReady) {
+                            await FirebaseStorageManager.save(COLLECTIONS.CUSTOM_MEALS, newCustomMeals);
+                          }
+
+                          if (!editableIngredients[newMealName]) {
+                            const newIngredients = {
+                              ...editableIngredients,
+                              [newMealName]: []
+                            };
+                            setEditableIngredients(newIngredients);
+
+                            if (isFirebaseReady) {
+                              await FirebaseStorageManager.save(COLLECTIONS.INGREDIENTS, newIngredients);
+                            }
+                          }
+
+                          input.value = '';
+                        } else {
+                          alert('This meal item already exists!');
+                        }
+                      }
+                    }}
+                    className="px-4 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
+                  >
+                    Add Item
+                  </button>
                 </div>
               </div>
 
-              <div className="flex justify-end gap-4 p-6 border-t border-gray-200">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  {(() => {
+                    const hiddenMealsKey = `hidden${selectedMealType.charAt(0).toUpperCase() + selectedMealType.slice(1)}`;
+                    const hiddenMeals = customMeals[hiddenMealsKey] || [];
+                    const visibleBuiltInMeals = MEALS[selectedMealType].filter(meal => !hiddenMeals.includes(meal));
+
+                    return [...visibleBuiltInMeals, ...customMeals[selectedMealType]];
+                  })().map(mealName => {
+                    const isCustomMeal = customMeals[selectedMealType].includes(mealName);
+                    const isBuiltInMeal = MEALS[selectedMealType].includes(mealName);
+                    return (
+                      <div key={mealName} className="border border-gray-200 rounded-lg p-4 relative">
+                        <div className="flex justify-between items-center mb-3">
+                          <h3 className="font-semibold text-base sm:text-lg text-gray-800">
+                            {mealName}
+                            {isBuiltInMeal && <span className="text-xs text-gray-500 ml-2">(Built-in)</span>}
+                          </h3>
+                          <div className="flex gap-2">
+                            {isCustomMeal && (
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`Are you sure you want to delete "${mealName}"? This will also remove its ingredients.`)) {
+                                    const newCustomMeals = {
+                                      ...customMeals,
+                                      [selectedMealType]: customMeals[selectedMealType].filter(meal => meal !== mealName)
+                                    };
+                                    setCustomMeals(newCustomMeals);
+
+                                    const newIngredients = { ...editableIngredients };
+                                    delete newIngredients[mealName];
+                                    setEditableIngredients(newIngredients);
+
+                                    if (isFirebaseReady) {
+                                      await Promise.all([
+                                        FirebaseStorageManager.save(COLLECTIONS.CUSTOM_MEALS, newCustomMeals),
+                                        FirebaseStorageManager.save(COLLECTIONS.INGREDIENTS, newIngredients)
+                                      ]);
+                                    }
+                                  }
+                                }}
+                                className="text-red-500 hover:text-red-700 text-sm font-bold bg-red-50 hover:bg-red-100 px-2 py-1 rounded"
+                                title="Delete this custom meal item"
+                              >
+                                Delete
+                              </button>
+                            )}
+                            {isBuiltInMeal && (
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`Are you sure you want to hide "${mealName}" from the ${selectedMealType} list? You can add it back later if needed.`)) {
+                                    // Add to a hidden meals list instead of deleting
+                                    const hiddenMealsKey = `hidden${selectedMealType.charAt(0).toUpperCase() + selectedMealType.slice(1)}`;
+                                    const currentHidden = customMeals[hiddenMealsKey] || [];
+                                    const newCustomMeals = {
+                                      ...customMeals,
+                                      [hiddenMealsKey]: [...currentHidden, mealName]
+                                    };
+                                    setCustomMeals(newCustomMeals);
+
+                                    if (isFirebaseReady) {
+                                      await FirebaseStorageManager.save(COLLECTIONS.CUSTOM_MEALS, newCustomMeals);
+                                    }
+                                  }
+                                }}
+                                className="text-orange-500 hover:text-orange-700 text-sm font-bold bg-orange-50 hover:bg-orange-100 px-2 py-1 rounded"
+                                title="Hide this built-in meal item"
+                              >
+                                Hide
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {(editableIngredients[mealName] || []).map((ingredient, index) => (
+                            <div key={index} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+                              <input
+                                type="text"
+                                value={ingredient}
+                                onChange={(e) => {
+                                  const newIngredients = [...editableIngredients[mealName]];
+                                  newIngredients[index] = e.target.value;
+                                  handleIngredientUpdate(mealName, newIngredients);
+                                }}
+                                className="flex-1 bg-transparent border-none outline-none text-sm"
+                              />
+                              <button
+                                onClick={() => handleIngredientRemove(mealName, index)}
+                                className="text-red-500 hover:text-red-700 ml-2 text-sm font-bold"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                          <div className="flex items-center mt-2">
+                            <input
+                              type="text"
+                              placeholder="Add new ingredient"
+                              className="flex-1 p-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && e.target.value.trim()) {
+                                  handleIngredientAdd(mealName, e.target.value);
+                                  e.target.value = '';
+                                }
+                              }}
+                            />
+                            <button
+                              onClick={(e) => {
+                                const input = e.target.previousElementSibling;
+                                if (input.value.trim()) {
+                                  handleIngredientAdd(mealName, input.value);
+                                  input.value = '';
+                                }
+                              }}
+                              className="ml-2 px-3 py-2 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-between sm:justify-end gap-4 p-4 sm:p-6 border-t border-gray-200 bg-gray-50 flex-shrink-0">
                 <button
                   onClick={handleIngredientsModalClose}
-                  className="px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                  className="px-4 sm:px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm sm:text-base"
                 >
-                  Close
+                  Cancel
                 </button>
                 <button
                   onClick={async () => {
-                    // Save to Firebase
-                    const success = await FirebaseStorageManager.save(COLLECTIONS.INGREDIENTS, editableIngredients);
-                    if (success) {
-                      alert('Ingredients saved successfully!');
+                    try {
+                      if (isFirebaseReady) {
+                        await Promise.all([
+                          FirebaseStorageManager.save(COLLECTIONS.INGREDIENTS, editableIngredients),
+                          FirebaseStorageManager.save(COLLECTIONS.CUSTOM_MEALS, customMeals)
+                        ]);
+                        alert('Changes saved successfully!');
+                      } else {
+                        alert('Firebase not ready. Changes saved locally only.');
+                      }
                       handleIngredientsModalClose();
-                    } else {
-                      alert('Failed to save ingredients. Please try again.');
+                    } catch (error) {
+                      console.error('Failed to save:', error);
+                      alert('Failed to save changes. Please try again.');
                     }
                   }}
-                  className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                  className="px-4 sm:px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm sm:text-base"
                 >
                   Save Changes
                 </button>
