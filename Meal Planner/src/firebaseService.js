@@ -40,11 +40,10 @@ export const FirebaseStorageManager = {
     });
   },
 
-  // Get user document reference
+  // Get shared document reference (all devices access the same data)
   getUserDocRef: (collection) => {
-    const user = auth.currentUser;
-    if (!user) throw new Error('User not authenticated');
-    return doc(db, collection, user.uid);
+    // Always use the same document ID "shared" for all devices
+    return doc(db, collection, "shared");
   },
 
   // Save data to Firestore
