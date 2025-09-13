@@ -295,6 +295,61 @@ function App() {
     initializeApp();
   }, []);
 
+  // Set up real-time Firebase listeners after initialization
+  useEffect(() => {
+    if (!isFirebaseReady) return;
+
+    const unsubscribers = [];
+
+    // Subscribe to all collections for real-time updates
+    const subscriptions = [
+      { collection: COLLECTIONS.INGREDIENTS, setter: setEditableIngredients },
+      { collection: COLLECTIONS.CUSTOM_MEALS, setter: setCustomMeals },
+      { collection: COLLECTIONS.CONFIRMED_MEALS, setter: (data) => {
+        if (data && data.meals) {
+          setConfirmedMeals(data.meals);
+          setWeeklyMeals(data.meals);
+          if (data.confirmationTime) {
+            setConfirmationTime(new Date(data.confirmationTime));
+            setIsConfirmed(true);
+          }
+        }
+      }},
+      { collection: 'groceryList', setter: (data) => {
+        setPersistentGroceryList(data || []);
+        setGroceryList(data || []);
+      }},
+      { collection: 'baseGroceryList', setter: setBaseGroceryList },
+      { collection: 'checkedItems', setter: setCheckedItems },
+      { collection: 'frequentItems', setter: setFrequentItems },
+      { collection: 'masalaItems', setter: setMasalaItems },
+      { collection: 'otherItems', setter: setOtherItems }
+    ];
+
+    // Set up listeners for each collection
+    subscriptions.forEach(({ collection, setter }) => {
+      try {
+        const unsubscribe = FirebaseStorageManager.subscribe(collection, (data) => {
+          if (data !== null && data !== undefined) {
+            setter(data);
+          }
+        });
+        unsubscribers.push(unsubscribe);
+      } catch (error) {
+        console.error(`Failed to subscribe to ${collection}:`, error);
+      }
+    });
+
+    // Cleanup function to unsubscribe from all listeners
+    return () => {
+      unsubscribers.forEach(unsubscribe => {
+        if (typeof unsubscribe === 'function') {
+          unsubscribe();
+        }
+      });
+    };
+  }, [isFirebaseReady]);
+
   // Update grocery list whenever menu selection changes
   useEffect(() => {
     const updateGroceryFromMeals = async () => {
